@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -14,6 +15,7 @@ import {
   where,
   orderBy,
   Timestamp,
+  limit,
 } from "firebase/firestore";
 
 import { onAuthStateChanged } from "firebase/auth";
@@ -176,21 +178,34 @@ export default function StudentExamPage() {
         // ---------------------------------------------------
 
         /*
-         * Deterministic attempt ID.
+         * IMPORTANT:
          *
-         * This means one student can only have one attempt
-         * for one examination.
+         * Do not use getDoc() on the deterministic attempt ID
+         * here because a new student does not have an attempts
+         * document yet.
+         *
+         * Instead, query only this student's attempt for this
+         * exam. This query is compatible with the Firestore
+         * security rule:
+         *
+         * studentId == request.auth.uid
          */
-        const attemptId = `${examId}_${user.uid}`;
 
-        const attemptRef = doc(db, "attempts", attemptId);
-        const attemptSnap = await getDoc(attemptRef);
+        const attemptsQuery = query(
+          collection(db, "attempts"),
+          where("studentId", "==", user.uid),
+          where("examId", "==", examId),
+          limit(1)
+        );
 
-        if (attemptSnap.exists()) {
-          const attemptData = attemptSnap.data();
+        const attemptsSnap = await getDocs(attemptsQuery);
+
+        if (!attemptsSnap.empty) {
+          const attemptDoc = attemptsSnap.docs[0];
+          const attemptData = attemptDoc.data();
 
           const existingAttempt: Attempt = {
-            id: attemptSnap.id,
+            id: attemptDoc.id,
             examId: attemptData.examId,
             studentId: attemptData.studentId,
             status: attemptData.status,
@@ -205,11 +220,11 @@ export default function StudentExamPage() {
           // LOAD EXISTING ANSWERS
           // -------------------------------------------------
 
-         const answersQuery = query(
-  collection(db, "answers"),
-  where("attemptId", "==", attemptId),
-  where("studentId", "==", user.uid)
-);
+          const answersQuery = query(
+            collection(db, "answers"),
+            where("attemptId", "==", attemptDoc.id),
+            where("studentId", "==", user.uid)
+          );
 
           const answersSnap = await getDocs(answersQuery);
 
@@ -246,7 +261,9 @@ export default function StudentExamPage() {
 
             const remainingSeconds = Math.max(
               0,
-              Math.floor((endMilliseconds - Date.now()) / 1000)
+              Math.floor(
+                (endMilliseconds - Date.now()) / 1000
+              )
             );
 
             setTimeLeft(remainingSeconds);
@@ -338,16 +355,30 @@ export default function StudentExamPage() {
     try {
       const attemptId = `${examId}_${studentId}`;
 
-      const attemptRef = doc(db, "attempts", attemptId);
+      /*
+       * Check for an existing attempt using a query instead
+       * of getDoc() on a potentially nonexistent document.
+       */
 
-      // Check again before creating.
-      const existingAttempt = await getDoc(attemptRef);
+      const existingAttemptsQuery = query(
+        collection(db, "attempts"),
+        where("studentId", "==", studentId),
+        where("examId", "==", examId),
+        limit(1)
+      );
 
-      if (existingAttempt.exists()) {
-        const data = existingAttempt.data();
+      const existingAttemptsSnap = await getDocs(
+        existingAttemptsQuery
+      );
+
+      if (!existingAttemptsSnap.empty) {
+        const existingAttemptDoc =
+          existingAttemptsSnap.docs[0];
+
+        const data = existingAttemptDoc.data();
 
         setAttempt({
-          id: existingAttempt.id,
+          id: existingAttemptDoc.id,
           examId: data.examId,
           studentId: data.studentId,
           status: data.status,
@@ -359,13 +390,12 @@ export default function StudentExamPage() {
         return;
       }
 
-      /*
-       * IMPORTANT:
-       *
-       * Use Timestamp.now() instead of serverTimestamp().
-       * This makes the Firestore security rule validation
-       * predictable.
-       */
+      // -----------------------------------------------------
+      // CREATE NEW ATTEMPT
+      // -----------------------------------------------------
+
+      const attemptRef = doc(db, "attempts", attemptId);
+
       const now = Timestamp.now();
 
       await setDoc(attemptRef, {
@@ -612,6 +642,7 @@ export default function StudentExamPage() {
           <div className="mx-auto flex h-20 max-w-6xl items-center justify-between px-5 sm:px-8">
             <div>
               <p className="font-serif text-2xl">StudyLab</p>
+
               <p className="mt-0.5 text-[10px] uppercase tracking-[0.25em] text-neutral-400">
                 Learn. Practice. Improve.
               </p>
@@ -650,6 +681,7 @@ export default function StudentExamPage() {
                 <p className="text-xs uppercase tracking-widest text-neutral-500">
                   Objective Score
                 </p>
+
                 <p className="mt-2 font-serif text-3xl">
                   {attempt.score || 0}
                 </p>
@@ -659,6 +691,7 @@ export default function StudentExamPage() {
                 <p className="text-xs uppercase tracking-widest text-neutral-500">
                   Total Marks
                 </p>
+
                 <p className="mt-2 font-serif text-3xl">
                   {totalMarks}
                 </p>
@@ -693,6 +726,7 @@ export default function StudentExamPage() {
           <div className="mx-auto flex h-20 max-w-6xl items-center justify-between px-5 sm:px-8">
             <div>
               <p className="font-serif text-2xl">StudyLab</p>
+
               <p className="mt-0.5 text-[10px] uppercase tracking-[0.25em] text-neutral-400">
                 Learn. Practice. Improve.
               </p>
@@ -730,6 +764,7 @@ export default function StudentExamPage() {
                 <p className="text-xs uppercase tracking-widest text-neutral-500">
                   Duration
                 </p>
+
                 <p className="mt-2 font-serif text-2xl">
                   {exam.duration} min
                 </p>
@@ -739,6 +774,7 @@ export default function StudentExamPage() {
                 <p className="text-xs uppercase tracking-widest text-neutral-500">
                   Questions
                 </p>
+
                 <p className="mt-2 font-serif text-2xl">
                   {questions.length}
                 </p>
@@ -748,6 +784,7 @@ export default function StudentExamPage() {
                 <p className="text-xs uppercase tracking-widest text-neutral-500">
                   Total Marks
                 </p>
+
                 <p className="mt-2 font-serif text-2xl">
                   {totalMarks}
                 </p>
@@ -861,8 +898,6 @@ export default function StudentExamPage() {
                 key={question.id}
                 className="border border-neutral-200"
               >
-                {/* QUESTION HEADER */}
-
                 <div className="border-b border-neutral-200 p-6 sm:p-8">
                   <div className="flex items-start justify-between gap-5">
                     <div className="flex min-w-0 gap-4">
@@ -887,8 +922,6 @@ export default function StudentExamPage() {
                     </span>
                   </div>
                 </div>
-
-                {/* ANSWER AREA */}
 
                 <div className="p-6 sm:p-8">
                   {/* MCQ */}
@@ -1066,3 +1099,4 @@ export default function StudentExamPage() {
     </main>
   );
 }
+
